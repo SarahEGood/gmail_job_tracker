@@ -1,0 +1,15 @@
+{
+  "account": "john.doe@gmail.com",
+  "credentials_file": ".gmail_job_tracker/credentials.json",
+  "token_file": ".gmail_job_tracker/token.json",
+  "state_file": ".gmail_job_tracker/state.json",
+  "learned_patterns_file": ".gmail_job_tracker/learned_patterns.json",
+  "job_leads_file": "job_leads.csv",
+  "applied_jobs_file": "applied_jobs.csv",
+  "events_file": "application_events.csv",
+  "initial_lookback_days": 30,
+  "sync_overlap_days": 3,
+  "max_history_messages": 5000,
+  "max_sync_messages": 1000,
+  "include_trash": true
+}

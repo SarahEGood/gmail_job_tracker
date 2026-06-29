@@ -1,0 +1,9 @@
+.venv/
+.gmail_job_tracker/
+gmail_tracker_config.json
+application_events.csv
+logs/
+__pycache__/
+*.pyc
+.codex
+.agents
