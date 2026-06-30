@@ -7,6 +7,12 @@ Subsequent runs use a short overlap from the previous successful sync and
 deduplicate by Gmail message ID.
 """
 
+# Flow overview:
+# 1. Authenticate to read-only Gmail and load local config/state.
+# 2. Learn or reuse sender-pattern hints, then search for candidate mail.
+# 3. Parse message bodies into application events and match them to jobs/leads.
+# 4. Write append-only events plus the deduplicated applied-jobs ledger.
+
 from __future__ import annotations
 
 import argparse
@@ -27,7 +33,7 @@ from typing import Any, Iterable, Iterator, Sequence
 
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-DEFAULT_ACCOUNT = "john.doe@gmail.com" # Replace with your gmail account
+DEFAULT_ACCOUNT = ""
 DEFAULT_CONFIG = Path("gmail_tracker_config.json")
 DEFAULT_PRIVATE_DIR = Path(".gmail_job_tracker")
 PATTERN_VERSION = 1
@@ -247,6 +253,8 @@ EVENT_COLUMNS = [
 
 @dataclass
 class Config:
+    """Runtime settings for mailbox access, local state, and CSV outputs."""
+
     account: str = DEFAULT_ACCOUNT
     credentials_file: str = str(DEFAULT_PRIVATE_DIR / "credentials.json")
     token_file: str = str(DEFAULT_PRIVATE_DIR / "token.json")
@@ -264,6 +272,8 @@ class Config:
 
 @dataclass
 class ParsedMessage:
+    """Normalized Gmail application-status event extracted from one message."""
+
     message_id: str
     thread_id: str
     email_date: str
@@ -281,6 +291,7 @@ class ParsedMessage:
 
 
 def load_config(path: Path) -> Config:
+    """Load optional JSON overrides for the tracker runtime configuration."""
     if not path.exists():
         return Config()
     with path.open("r", encoding="utf-8") as handle:
@@ -292,7 +303,46 @@ def load_config(path: Path) -> Config:
     return Config(**raw)
 
 
+def save_config(path: Path, config: Config) -> None:
+    """Persist runtime config so first-run setup does not require source edits."""
+    save_json(path, asdict(config))
+
+
+def prompt_for_account(existing: str = "") -> str:
+    """Ask the user for the Gmail address to track during interactive setup."""
+    default = existing.strip()
+    prompt = "Gmail address to track"
+    if default:
+        prompt = f"{prompt} [{default}]"
+    prompt += ": "
+    value = input(prompt).strip()
+    return value or default
+
+
+def resolve_account(config: Config, config_path: Path) -> Config:
+    """Fill in the Gmail account from config or interactive setup."""
+    account = config.account.strip()
+    if account:
+        config.account = account
+        return config
+
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"No Gmail account configured in {config_path}. "
+            "Add an 'account' value to the config file or run the script interactively once."
+        )
+
+    account = prompt_for_account()
+    if not account:
+        raise RuntimeError("A Gmail address is required to continue.")
+    config.account = account
+    save_config(config_path, config)
+    print(f"Saved Gmail account to {config_path}.")
+    return config
+
+
 def decode_header_value(value: str | None) -> str:
+    """Decode an RFC 2047 email header into readable text."""
     if not value:
         return ""
     try:
@@ -302,6 +352,7 @@ def decode_header_value(value: str | None) -> str:
 
 
 def decode_base64url(value: str) -> str:
+    """Decode Gmail's base64url payload fragments into UTF-8 text."""
     if not value:
         return ""
     padded = value + "=" * (-len(value) % 4)
@@ -312,10 +363,13 @@ def decode_base64url(value: str) -> str:
 
 
 class _TextExtractor:
+    """Strip HTML mail bodies down to readable text for status parsing."""
+
     def __init__(self) -> None:
         self.parts: list[str] = []
 
     def feed(self, source: str) -> None:
+        """Accumulate a chunk of HTML after removing tags that hurt parsing."""
         cleaned = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", source)
         cleaned = re.sub(r"(?i)<br\s*/?>", "\n", cleaned)
         cleaned = re.sub(r"(?i)</(?:p|div|li|tr|h[1-6])>", "\n", cleaned)
@@ -323,16 +377,19 @@ class _TextExtractor:
         self.parts.append(html.unescape(cleaned))
 
     def text(self) -> str:
+        """Return the accumulated text with Gmail-safe whitespace normalization."""
         return normalize_space("\n".join(self.parts), keep_newlines=True)
 
 
 def html_to_text(source: str) -> str:
+    """Convert HTML email content into plain text for classifier input."""
     parser = _TextExtractor()
     parser.feed(source)
     return parser.text()
 
 
 def normalize_space(value: str, *, keep_newlines: bool = False) -> str:
+    """Collapse noisy whitespace while preserving line breaks when needed."""
     value = value.replace("\u00a0", " ").replace("\u200b", "")
     if keep_newlines:
         lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]
@@ -341,6 +398,7 @@ def normalize_space(value: str, *, keep_newlines: bool = False) -> str:
 
 
 def payload_text(payload: dict[str, Any]) -> str:
+    """Extract the best available plain-text body from a Gmail message payload."""
     plain: list[str] = []
     html_parts: list[str] = []
 
@@ -365,6 +423,7 @@ def payload_text(payload: dict[str, Any]) -> str:
 
 
 def message_headers(message: dict[str, Any]) -> dict[str, str]:
+    """Build a lowercase header map so later parsing can stay order-agnostic."""
     result: dict[str, str] = {}
     for header in message.get("payload", {}).get("headers", []) or []:
         name = str(header.get("name", "")).lower()
@@ -374,6 +433,7 @@ def message_headers(message: dict[str, Any]) -> dict[str, str]:
 
 
 def message_datetime(message: dict[str, Any], headers: dict[str, str]) -> datetime:
+    """Pick the most reliable message timestamp, preferring Gmail's internal date."""
     internal = message.get("internalDate")
     if internal:
         try:
@@ -391,15 +451,18 @@ def message_datetime(message: dict[str, Any], headers: dict[str, str]) -> dateti
 
 
 def sender_domain(sender: str) -> str:
+    """Extract the sender's domain for ATS and recruiter classification."""
     address = parseaddr(sender)[1].lower()
     return address.rsplit("@", 1)[-1] if "@" in address else ""
 
 
 def domain_is_known_ats(domain: str, learned_domains: set[str]) -> bool:
+    """Treat known ATS and learned sender domains as high-signal application mail."""
     return any(domain == known or domain.endswith(f".{known}") for known in ATS_DOMAINS | learned_domains)
 
 
 def classify_status(subject: str, body: str) -> tuple[str, str]:
+    """Classify a message into a job-application status and supporting evidence."""
     subject_norm = normalize_space(subject).lower()
     text = normalize_space(f"{subject}\n{body}").lower()
     strong_match = False
@@ -416,6 +479,7 @@ def classify_status(subject: str, body: str) -> tuple[str, str]:
 
 
 def clean_entity(value: str) -> str:
+    """Trim common formatting noise from extracted company and title fragments."""
     value = normalize_space(value).strip(" -–—:|,.\"'")
     value = re.sub(r"(?i)^the\s+", "", value).strip()
     value = re.sub(r"(?i)\b(application|job|position|role)\b$", "", value).strip()
@@ -423,6 +487,7 @@ def clean_entity(value: str) -> str:
 
 
 def extract_title_company(subject: str, body: str, sender: str) -> tuple[str, str]:
+    """Infer the job title and employer from the message text and sender name."""
     text = normalize_space(f"{subject}\n{body}")
     patterns = [
         re.compile(
@@ -486,6 +551,7 @@ def parse_message(
     *,
     learned_domains: set[str] | None = None,
 ) -> ParsedMessage | None:
+    """Turn one Gmail message into a ParsedMessage when it looks like job mail."""
     learned_domains = learned_domains or set()
     headers = message_headers(message)
     subject = normalize_space(headers.get("subject", ""))
@@ -529,12 +595,14 @@ def parse_message(
 
 
 def learned_sender_terms(learned: dict[str, Any], limit: int = 20) -> list[str]:
+    """Build extra Gmail query filters from previously seen sender domains."""
     counts = learned.get("sender_domains", {}) or {}
     ranked = sorted(counts.items(), key=lambda item: (-int(item[1]), item[0]))
     return [f"from:{domain}" for domain, count in ranked if int(count) >= 2][:limit]
 
 
 def expand_query_with_learned_senders(base_query: str, learned: dict[str, Any] | None) -> str:
+    """Inject learned sender-domain filters into the shared Gmail search query."""
     if not learned:
         return base_query
     terms = learned_sender_terms(learned)
@@ -546,12 +614,14 @@ def expand_query_with_learned_senders(base_query: str, learned: dict[str, Any] |
 
 
 def query_for_initial(days: int, learned: dict[str, Any] | None = None) -> str:
+    """Construct the first-run Gmail query bounded by the recent lookback window."""
     return f"{expand_query_with_learned_senders(BASE_QUERY, learned)} newer_than:{days}d"
 
 
 def query_for_incremental(
     last_sync: datetime, overlap_days: int, learned: dict[str, Any] | None = None
 ) -> str:
+    """Construct the follow-up Gmail query using the previous sync overlap."""
     start = (last_sync - timedelta(days=overlap_days)).date()
     return f"{expand_query_with_learned_senders(BASE_QUERY, learned)} after:{start:%Y/%m/%d}"
 
@@ -559,6 +629,7 @@ def query_for_incremental(
 def list_message_ids(
     service: Any, query: str, limit: int, *, include_trash: bool = True
 ) -> Iterator[str]:
+    """Page through Gmail search results and yield candidate message IDs."""
     page_token: str | None = None
     emitted = 0
     while True:
@@ -581,6 +652,7 @@ def list_message_ids(
 
 
 def execute_with_retry(request: Any, attempts: int = 5) -> dict[str, Any]:
+    """Retry transient Gmail API failures with exponential backoff."""
     for attempt in range(attempts):
         try:
             return request.execute()
@@ -593,11 +665,13 @@ def execute_with_retry(request: Any, attempts: int = 5) -> dict[str, Any]:
 
 
 def fetch_message(service: Any, message_id: str) -> dict[str, Any]:
+    """Fetch a full Gmail message so the parser can inspect headers and body."""
     request = service.users().messages().get(userId="me", id=message_id, format="full")
     return execute_with_retry(request)
 
 
 def build_service(config: Config) -> Any:
+    """Authenticate to Gmail read-only access and verify the configured account."""
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -639,6 +713,7 @@ def build_service(config: Config) -> Any:
 
 
 def load_state(path: Path) -> dict[str, Any]:
+    """Load the last successful sync metadata, or start clean if missing."""
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as handle:
@@ -646,6 +721,7 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def save_json(path: Path, value: Any) -> None:
+    """Write JSON atomically so tracker state and learned patterns stay consistent."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
@@ -653,6 +729,7 @@ def save_json(path: Path, value: Any) -> None:
 
 
 def learn_patterns(service: Any, config: Config) -> dict[str, Any]:
+    """Scan historical candidate mail to summarize recurring senders and status hints."""
     domain_counts: Counter[str] = Counter()
     subject_prefix_counts: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
@@ -686,6 +763,7 @@ def learn_patterns(service: Any, config: Config) -> dict[str, Any]:
 
 
 def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """Read a CSV file into header names and row dictionaries."""
     if not path.exists():
         return [], []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -694,6 +772,7 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def write_csv(path: Path, columns: Sequence[str], rows: Sequence[dict[str, Any]]) -> None:
+    """Write a normalized CSV snapshot with a stable column order."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     with temp.open("w", encoding="utf-8", newline="") as handle:
@@ -705,10 +784,12 @@ def write_csv(path: Path, columns: Sequence[str], rows: Sequence[dict[str, Any]]
 
 
 def normalize_key(value: str) -> str:
+    """Create a loose comparison key for matching titles and company names."""
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
 def normalize_title_key(value: str) -> str:
+    """Normalize title text while ignoring common schedule qualifiers."""
     key = normalize_key(value)
     key = re.sub(r"\b(?:part|full)[ -]?time\b", " ", key)
     key = re.sub(r"\b(?:temporary|temp|contract)\b", " ", key)
@@ -716,6 +797,7 @@ def normalize_title_key(value: str) -> str:
 
 
 def normalize_company_key(value: str) -> str:
+    """Normalize company text while ignoring common legal suffixes."""
     key = normalize_key(value)
     key = re.sub(
         r"\b(?:incorporated|inc|llc|ltd|corp|corporation|company|co|career opportunities)\b",
@@ -726,6 +808,7 @@ def normalize_company_key(value: str) -> str:
 
 
 def canonical_application_key(title: str, company: str) -> str:
+    """Build the canonical dedupe key used across applied and event rows."""
     title_key = (
         "unknown-title"
         if str(title or "").strip() in {"", "Unknown"}
@@ -740,6 +823,7 @@ def canonical_application_key(title: str, company: str) -> str:
 
 
 def values_match(left: str, right: str, *, kind: str) -> bool:
+    """Compare two titles or companies using the script's fuzzy normalization rules."""
     normalizer = normalize_title_key if kind == "title" else normalize_company_key
     left_key = normalizer(left)
     right_key = normalizer(right)
@@ -755,6 +839,7 @@ def best_lead_match(
     location: str = "",
     leads: Sequence[dict[str, str]],
 ) -> tuple[int | None, str]:
+    """Find the strongest `job_leads.csv` match for a row or Gmail event."""
     company_and_title: list[int] = []
     title_only: list[int] = []
     company_only: list[int] = []
@@ -803,10 +888,12 @@ LEAD_TO_APPLICATION = {
 
 
 def is_unknown(value: Any) -> bool:
+    """Treat blank cells and literal Unknown as missing data."""
     return value is None or str(value).strip() in {"", "Unknown"}
 
 
 def add_tracking_source(row: dict[str, str], source: str) -> None:
+    """Record one provenance label in the semicolon-separated tracking source field."""
     existing = [
         item.strip()
         for item in str(row.get("tracking_sources", "")).split(";")
@@ -820,6 +907,7 @@ def add_tracking_source(row: dict[str, str], source: str) -> None:
 def enrich_application_from_lead(
     row: dict[str, str], lead: dict[str, str], match_type: str
 ) -> None:
+    """Copy lead research fields into an application row and tag the origin."""
     row["lead_match_type"] = match_type
     if is_unknown(row.get("location")) and not is_unknown(lead.get("location")):
         row["location"] = lead["location"]
@@ -835,6 +923,7 @@ def enrich_application_from_lead(
 def link_leads_to_applications(
     rows: list[dict[str, str]], leads: Sequence[dict[str, str]]
 ) -> list[dict[str, str]]:
+    """Attach researched lead data to application rows without overwriting user data."""
     for row in rows:
         index, match_type = best_lead_match(
             title=row.get("title", ""),
@@ -863,6 +952,7 @@ def link_leads_to_applications(
 
 
 def row_richness(row: dict[str, str]) -> int:
+    """Score how much usable information a row contains for merge selection."""
     score = sum(1 for value in row.values() if not is_unknown(value))
     if not is_unknown(row.get("date_applied")):
         score += 10
@@ -872,6 +962,7 @@ def row_richness(row: dict[str, str]) -> int:
 
 
 def merge_application_group(rows: Sequence[dict[str, str]]) -> dict[str, str]:
+    """Collapse duplicate application rows while preserving the best facts from each."""
     primary = dict(max(rows, key=row_richness))
     latest = max(
         rows,
@@ -916,6 +1007,7 @@ def merge_application_group(rows: Sequence[dict[str, str]]) -> dict[str, str]:
 def deduplicate_application_rows(
     rows: list[dict[str, str]],
 ) -> list[dict[str, str]]:
+    """Merge duplicate application rows by normalized title and company identity."""
     known_groups: dict[str, list[dict[str, str]]] = {}
     unknown_company: list[dict[str, str]] = []
     for row in rows:
@@ -952,6 +1044,7 @@ def deduplicate_application_rows(
 def best_application_match(
     event: ParsedMessage, rows: Sequence[dict[str, str]]
 ) -> tuple[int | None, str]:
+    """Find the best existing application row for a parsed Gmail event."""
     company_key = normalize_key(event.company)
     title_key = normalize_key(event.title)
     exact: list[int] = []
@@ -984,6 +1077,7 @@ def update_application_rows(
     events: Sequence[ParsedMessage],
     leads: Sequence[dict[str, str]] = (),
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """Apply parsed Gmail events to the canonical application ledger."""
     matches: dict[str, str] = {}
     for event in sorted(events, key=lambda item: item.email_date):
         index, match_type = best_application_match(event, existing_rows)
@@ -1071,6 +1165,7 @@ def update_application_rows(
 
 
 def next_action_for(status: str) -> str:
+    """Translate a parsed status into a concise human follow-up note."""
     return {
         "application_received": "Monitor email and the employer portal.",
         "viewed": "Wait for employer contact; follow up if appropriate after 5 business days.",
@@ -1085,11 +1180,13 @@ def next_action_for(status: str) -> str:
 
 
 def existing_event_ids(path: Path) -> set[str]:
+    """Collect already-recorded Gmail message IDs so syncs stay append-only."""
     _, rows = read_csv(path)
     return {row.get("message_id", "") for row in rows if row.get("message_id")}
 
 
 def event_row(event: ParsedMessage, match: str) -> dict[str, Any]:
+    """Convert a parsed Gmail event into the append-only CSV event row shape."""
     row = asdict(event)
     row["needs_review"] = "Yes" if event.needs_review or not match else "No"
     row["matched_application"] = match or "Unmatched"
@@ -1099,6 +1196,7 @@ def event_row(event: ParsedMessage, match: str) -> dict[str, Any]:
 def relink_event_rows(
     events: list[dict[str, str]], applications: Sequence[dict[str, str]]
 ) -> list[dict[str, str]]:
+    """Refresh event-to-application links after the application ledger changes."""
     by_message_id = {
         row.get("gmail_message_id", ""): (
             row.get("application_key", ""),
@@ -1136,11 +1234,13 @@ def relink_event_rows(
 
 
 def parse_iso_datetime(value: str) -> datetime:
+    """Parse a stored ISO timestamp into a timezone-aware datetime."""
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def run_sync(config: Config, *, dry_run: bool, relearn: bool) -> int:
+    """Run the full Gmail sync pipeline, optionally without writing local files."""
     state_path = Path(config.state_file)
     learned_path = Path(config.learned_patterns_file)
     events_path = Path(config.events_file)
@@ -1245,6 +1345,7 @@ def run_sync(config: Config, *, dry_run: bool, relearn: bool) -> int:
 
 
 def run_diagnostic(config: Config, limit: int) -> int:
+    """Print a no-write sample of candidate mail and parser decisions."""
     service = build_service(config)
     learned_path = Path(config.learned_patterns_file)
     learned = (
@@ -1279,6 +1380,7 @@ def run_diagnostic(config: Config, limit: int) -> int:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Define the command-line interface for sync, dry-run, relearn, and diagnose modes."""
     parser = argparse.ArgumentParser(
         description="Track job-application submissions and status updates from Gmail."
     )
@@ -1299,6 +1401,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Re-scan matching full-history mail and rebuild learned sender/subject patterns.",
     )
     parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Interactively collect and save the Gmail account without running a sync.",
+    )
+    parser.add_argument(
         "--diagnose",
         type=int,
         metavar="N",
@@ -1308,9 +1415,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Dispatch the selected command-line mode and normalize top-level failures."""
     args = build_arg_parser().parse_args(argv)
     try:
         config = load_config(args.config)
+        config = resolve_account(config, args.config)
+        if args.setup:
+            return 0
         if args.diagnose:
             return run_diagnostic(config, args.diagnose)
         return run_sync(config, dry_run=args.dry_run, relearn=args.relearn)

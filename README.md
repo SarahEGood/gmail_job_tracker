@@ -1,12 +1,12 @@
 # Gmail Job Application Tracker
 
-This project checks `john.doe@gmail.com` for job-application submission and status-update emails, including messages that are already read or archived. It never sends, deletes, archives, labels, or otherwise changes Gmail.
+This project checks the configured Gmail account for job-application submission and status-update emails, including messages that are already read or archived. It never sends, deletes, archives, labels, or otherwise changes Gmail.
 
 ## What it does
 
 On the first successful run, the tracker:
 
-1. Authenticates directly to `john.doe@gmail.com` with Google's read-only Gmail permission.
+1. Authenticates directly to the configured Gmail account with Google's read-only Gmail permission.
 2. Searches matching email across the mailbox's full history to learn recurring applicant-tracking-system senders and subject formats.
 3. Records only application events from the most recent 30 days.
 4. Creates an append-only `application_events.csv`.
@@ -31,7 +31,7 @@ application updates should be ignored.
 ## Privacy and safety
 
 - Gmail access uses only `gmail.readonly`.
-- The script verifies that OAuth authenticated the exact account `john.doe@gmail.com`; it stops if a different account was selected.
+- The script verifies that OAuth authenticated the exact configured account; it stops if a different account was selected.
 - OAuth files are stored under `.gmail_job_tracker/`, which is excluded by `.gitignore`.
 - Raw email bodies are never written to disk.
 - Event output stores only the sender, subject, date, parsed status, short matched phrase, and Gmail message ID/link.
@@ -60,9 +60,9 @@ Google requires a small local OAuth application:
 4. Open **Google Auth Platform** and configure the consent screen.
 5. Open **Google Auth Platform → Audience**.
 6. Leave the publishing status as **Testing** and the user type as **External**.
-7. Under **Test users**, click **Add users**, enter
-   `john.doe@gmail.com`, and save. Merely using this address as the
-   support/developer email does not add it as a test user.
+7. Under **Test users**, click **Add users**, enter the Gmail address you
+   want to track, and save. Merely using that address as the support/developer
+   email does not add it as a test user.
 8. Create an OAuth client with application type **Desktop app**.
 9. Download the client JSON.
 10. Create `.gmail_job_tracker` inside this project.
@@ -91,13 +91,17 @@ exist.
 
 ## Optional configuration
 
-The defaults already target User's account and the existing CSV. To customize limits or paths:
+The script will prompt for the Gmail address the first time you run it if the
+config file does not already set one. If you prefer to set it up explicitly
+before syncing, create a config file and run `--setup` once:
 
 ```powershell
 Copy-Item .\gmail_tracker_config.example.json .\gmail_tracker_config.json
+.\.venv\Scripts\python.exe .\gmail_job_tracker.py --setup
 ```
 
-Keep `initial_lookback_days` at `30` for the requested first-run boundary.
+Use the config file to customize limits or paths. Keep `initial_lookback_days`
+at `30` for the requested first-run boundary.
 
 ## First run
 
@@ -107,7 +111,10 @@ Test parsing without changing CSV files:
 .\.venv\Scripts\python.exe .\gmail_job_tracker.py --dry-run
 ```
 
-A browser opens for Google authorization. Select `john.doe@gmail.com`. The script stops with an account-mismatch error if another account is selected.
+If this is the first run and no account is saved yet, the script prompts for
+the Gmail address to track before it starts the Gmail authorization flow. A
+browser opens for Google authorization. Select that same account. The script
+stops with an account-mismatch error if another account is selected.
 
 If Google shows `Error 403: access_denied` and says the app is available only
 to developer-approved testers, return to **Google Auth Platform → Audience** and
