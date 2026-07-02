@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterator, Sequence
 
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -799,12 +799,13 @@ def normalize_title_key(value: str) -> str:
 def normalize_company_key(value: str) -> str:
     """Normalize company text while ignoring common legal suffixes."""
     key = normalize_key(value)
-    key = re.sub(
+    cleaned = re.sub(
         r"\b(?:incorporated|inc|llc|ltd|corp|corporation|company|co|career opportunities)\b",
         " ",
         key,
     )
-    return normalize_space(key)
+    cleaned = normalize_space(cleaned)
+    return cleaned or normalize_space(key)
 
 
 def canonical_application_key(title: str, company: str) -> str:

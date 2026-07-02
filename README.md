@@ -79,6 +79,7 @@ Open PowerShell in this folder:
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install ruff
 ```
 
 Python 3.10.7 or newer is required by Google's current quickstart.
@@ -222,6 +223,24 @@ The tests do not access Gmail:
 ```
 
 They cover receipts, rejections, interviews, viewed applications, job-alert rejection, the 30-day initial query, and conservative updates to an existing application.
+
+## Run Ruff
+
+Ruff checks the repo with a conservative baseline focused on import/runtime
+errors and invalid syntax:
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+```
+
+The config lives in `pyproject.toml`.
+
+## GitHub Actions CI
+
+`.github/workflows/ci.yml` runs on every GitHub push and uses two jobs:
+
+- `ruff` installs project dependencies plus Ruff and runs `ruff check .`
+- `tests` installs project dependencies and runs `python -m unittest discover -s tests -v`
 
 ## Resetting OAuth or tracker state
 
