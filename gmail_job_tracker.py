@@ -939,7 +939,7 @@ def link_leads_to_applications(
         source = row.get("source", "")
         notes = row.get("notes", "")
         directly_confirmed = bool(
-            re.search(r"(?i)(confirmed directly by Sarah|confirmed by Indeed screenshot)", notes)
+            re.search(r"(?i)(confirmed directly)", notes)
         )
         if directly_confirmed and is_unknown(source):
             row["source"] = "Self-reported"

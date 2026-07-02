@@ -22,8 +22,7 @@ On the first successful run, the tracker:
 Later runs search from the previous successful sync with a three-day overlap. Gmail message IDs prevent duplicate events.
 
 Read, archived, and Trash mail are included because searches use `in:anywhere`
-and `include_trash` defaults to `true`. This matters because User's recent
-Indeed and Mt. SAC confirmations are currently in Trash. Sent mail and Spam are
+and `include_trash` defaults to `true`. TSent mail and Spam are
 excluded in both the Gmail query and a second message-label check. Set
 `"include_trash": false` in `gmail_tracker_config.json` only if deleted
 application updates should be ignored.
@@ -164,7 +163,7 @@ Run the tracker manually once so OAuth is complete. Then:
 6. Start in:
 
    ```text
-   C:\Users\User\Documents\jobsearch
+   C:\Path\To\gmail_job_tracker
    ```
 
 The task should run under your Windows account so it can read the local OAuth token.
@@ -234,4 +233,3 @@ They cover receipts, rejections, interviews, viewed applications, job-alert reje
 
 - Email wording varies, so uncertain messages require review.
 - Gmail search finds candidate messages; the parser determines whether each is an actual application event.
-- The current connected Codex Gmail session was authenticated to a different mailbox, so this project could not inspect User's real historical messages during development. The first authorized local run performs that requested full-history learning against the correct account.

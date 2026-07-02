@@ -118,8 +118,8 @@ class ParserTests(unittest.TestCase):
         row.update(
             {
                 "date_applied": "2026-06-28",
-                "title": "Administrative Specialist II (Part-Time)",
-                "company": "Mt. San Antonio College",
+                "title": "Job (Part-Time)",
+                "company": "Company",
                 "status": "Applied",
             }
         )
@@ -127,12 +127,12 @@ class ParserTests(unittest.TestCase):
             message_id="m1",
             thread_id="t1",
             email_date="2026-07-02T12:00:00+00:00",
-            sender="Mt. SAC <jobs@mtsac.edu>",
+            sender="Company <jobs@job.com>",
             sender_domain="mtsac.edu",
             subject="Your application is under review",
             status="under_review",
-            title="Administrative Specialist II (Part-Time)",
-            company="Mt. San Antonio College",
+            title="Job (Part-Time)",
+            company="Company",
             confidence=0.95,
             needs_review=False,
             gmail_url="https://mail.google.com/mail/u/0/#all/m1",
@@ -149,23 +149,23 @@ class ParserTests(unittest.TestCase):
         application.update(
             {
                 "date_applied": "2026-06-28",
-                "title": "Administrative Specialist II (Part-Time)",
-                "company": "Mt. San Antonio College",
+                "title": "Job (Part-Time)",
+                "company": "Company",
                 "source": "Self-reported",
                 "status": "Applied",
-                "notes": "Application confirmed directly by Sarah.",
+                "notes": "Application confirmed manually.",
             }
         )
         lead = {
             "date_found": "2026-06-28",
             "priority": "A",
             "score": "88",
-            "title": "Administrative Specialist II (Part-Time)",
-            "company": "Mt. San Antonio College",
-            "location": "Walnut, CA",
+            "title": "Job",
+            "company": "Company",
+            "location": "Johnsville, CA",
             "posting_url": "https://example.test/mtsac",
-            "pay_rate": "$30,852-$39,376/year",
-            "job_family": "Education operations",
+            "pay_rate": "$30,000-$400,376/year",
+            "job_family": "Example",
         }
         linked = link_leads_to_applications([application], [lead])
         self.assertEqual(linked[0]["lead_priority"], "A")
