@@ -1,0 +1,2 @@
+message_id,thread_id,email_date,sender,sender_domain,subject,status,title,company,confidence,needs_review,matched_application,gmail_url,labels,evidence
+1a2b3c4d5e6f7890,1a2b3c4d5e6f7890,2026-07-01T16:10:00+00:00,"North Valley Hiring <no-reply@example.com>",example.com,Your application is under review,under_review,Office Operations Assistant,North Valley Community Center,0.92,No,north valley community center|office operations assistant,https://mail.google.com/mail/u/0/#all/1a2b3c4d5e6f7890,CATEGORY_UPDATES;UNREAD,under review
