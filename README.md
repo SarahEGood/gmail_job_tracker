@@ -103,6 +103,11 @@ Copy-Item .\gmail_tracker_config.example.json .\gmail_tracker_config.json
 Use the config file to customize limits or paths. Keep `initial_lookback_days`
 at `30` for the requested first-run boundary.
 
+`home_location` is an optional free-form field for your own reference and
+future workflow use. The tracker stores it in config but does not calculate
+commute distance. Commute values in the CSV outputs are copied from the
+`commute_minutes_from_home` column in `job_leads.csv`.
+
 ## First run
 
 Test parsing without changing CSV files:
@@ -112,9 +117,10 @@ Test parsing without changing CSV files:
 ```
 
 If this is the first run and no account is saved yet, the script prompts for
-the Gmail address to track before it starts the Gmail authorization flow. A
-browser opens for Google authorization. Select that same account. The script
-stops with an account-mismatch error if another account is selected.
+the Gmail address to track and an optional home location before it starts the
+Gmail authorization flow. A browser opens for Google authorization. Select that
+same account. The script stops with an account-mismatch error if another
+account is selected.
 
 If Google shows `Error 403: access_denied` and says the app is available only
 to developer-approved testers, return to **Google Auth Platform → Audience** and
@@ -138,6 +144,13 @@ The full-history phase learns patterns only. The first `application_events.csv` 
 ```
 
 The wrapper appends run output to `logs/gmail-job-tracker.log`.
+
+To update the saved Gmail account or optional home location without running a
+sync:
+
+```powershell
+.\.venv\Scripts\python.exe .\gmail_job_tracker.py --setup
+```
 
 To rebuild parsing patterns after encountering a new applicant-tracking system:
 
@@ -212,7 +225,8 @@ Gmail, `job_leads.csv`, or a combination.
 
 Lead research is copied into dedicated `lead_*` and fit/risk columns in
 `applied_jobs.csv`; the tracker does not add application-status columns to or
-otherwise rewrite `job_leads.csv`.
+otherwise rewrite `job_leads.csv`. This includes `commute_minutes_from_home`,
+which is copied through from lead data rather than computed by the tracker.
 
 ## Run tests
 

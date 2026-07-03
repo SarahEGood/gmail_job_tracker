@@ -1,15 +1,22 @@
 import base64
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from gmail_job_tracker import (
     APPLIED_COLUMNS,
+    Config,
     ParsedMessage,
     canonical_application_key,
     classify_status,
     deduplicate_application_rows,
     link_leads_to_applications,
+    load_config,
     parse_message,
     query_for_initial,
+    resolve_runtime_config,
+    save_config,
     update_application_rows,
 )
 
@@ -110,6 +117,10 @@ class ParserTests(unittest.TestCase):
         self.assertIn("from:notifications.example-ats.com", query)
         self.assertNotIn("from:one-off.test", query)
 
+    def test_applied_columns_use_generic_commute_field(self):
+        self.assertIn("commute_minutes_from_home", APPLIED_COLUMNS)
+        self.assertNotIn("commute_minutes_from_fontana", APPLIED_COLUMNS)
+
     def test_existing_application_is_updated_without_losing_date(self):
         row = {column: "Unknown" for column in APPLIED_COLUMNS}
         row.update(
@@ -206,6 +217,7 @@ class ParserTests(unittest.TestCase):
             "company": "Company",
             "location": "Johnsville, CA",
             "posting_url": "https://example.test/mtsac",
+            "commute_minutes_from_home": "10-20 estimated",
             "pay_rate": "$30,000-$400,376/year",
             "job_family": "Example",
         }
@@ -213,6 +225,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(linked[0]["lead_priority"], "A")
         self.assertEqual(linked[0]["lead_score"], "88")
         self.assertEqual(linked[0]["posting_url"], "https://example.test/mtsac")
+        self.assertEqual(linked[0]["commute_minutes_from_home"], "10-20 estimated")
         self.assertIn("Self-reported", linked[0]["tracking_sources"])
         self.assertIn("Job leads", linked[0]["tracking_sources"])
 
@@ -248,6 +261,39 @@ class ParserTests(unittest.TestCase):
             deduped[0]["application_key"],
             canonical_application_key("Office Assistant", "Example LLC"),
         )
+
+    def test_config_round_trip_preserves_home_location(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "gmail_tracker_config.json"
+            original = Config(account="user@example.com", home_location="Riverside, CA")
+            save_config(path, original)
+            loaded = load_config(path)
+        self.assertEqual(loaded.account, "user@example.com")
+        self.assertEqual(loaded.home_location, "Riverside, CA")
+
+    def test_setup_reuses_existing_home_location_when_enter_pressed(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "gmail_tracker_config.json"
+            config = Config(account="user@example.com", home_location="Riverside, CA")
+            with (
+                patch("builtins.input", side_effect=["", ""]),
+                patch("sys.stdin.isatty", return_value=True),
+            ):
+                resolved = resolve_runtime_config(config, path, force_prompt=True)
+        self.assertEqual(resolved.account, "user@example.com")
+        self.assertEqual(resolved.home_location, "Riverside, CA")
+
+    def test_setup_allows_blank_home_location(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "gmail_tracker_config.json"
+            config = Config()
+            with (
+                patch("builtins.input", side_effect=["user@example.com", ""]),
+                patch("sys.stdin.isatty", return_value=True),
+            ):
+                resolved = resolve_runtime_config(config, path, force_prompt=True)
+        self.assertEqual(resolved.account, "user@example.com")
+        self.assertEqual(resolved.home_location, "")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 {
   "account": "",
+  "home_location": "",
   "credentials_file": ".gmail_job_tracker/credentials.json",
   "token_file": ".gmail_job_tracker/token.json",
   "state_file": ".gmail_job_tracker/state.json",

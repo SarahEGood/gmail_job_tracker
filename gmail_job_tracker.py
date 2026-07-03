@@ -214,7 +214,7 @@ APPLIED_COLUMNS = [
     "lead_source",
     "company_careers_url",
     "remote_status",
-    "commute_minutes_from_fontana",
+    "commute_minutes_from_home",
     "pay_rate",
     "employment_type",
     "schedule",
@@ -256,6 +256,7 @@ class Config:
     """Runtime settings for mailbox access, local state, and CSV outputs."""
 
     account: str = DEFAULT_ACCOUNT
+    home_location: str = ""
     credentials_file: str = str(DEFAULT_PRIVATE_DIR / "credentials.json")
     token_file: str = str(DEFAULT_PRIVATE_DIR / "token.json")
     state_file: str = str(DEFAULT_PRIVATE_DIR / "state.json")
@@ -308,10 +309,10 @@ def save_config(path: Path, config: Config) -> None:
     save_json(path, asdict(config))
 
 
-def prompt_for_account(existing: str = "") -> str:
-    """Ask the user for the Gmail address to track during interactive setup."""
+def prompt_for_text(label: str, existing: str = "") -> str:
+    """Ask the user for a config value, reusing the current value on Enter."""
     default = existing.strip()
-    prompt = "Gmail address to track"
+    prompt = label
     if default:
         prompt = f"{prompt} [{default}]"
     prompt += ": "
@@ -319,11 +320,29 @@ def prompt_for_account(existing: str = "") -> str:
     return value or default
 
 
-def resolve_account(config: Config, config_path: Path) -> Config:
-    """Fill in the Gmail account from config or interactive setup."""
+def prompt_for_account(existing: str = "") -> str:
+    """Ask the user for the Gmail address to track during interactive setup."""
+    return prompt_for_text("Gmail address to track", existing)
+
+
+def prompt_for_home_location(existing: str = "") -> str:
+    """Ask the user for an optional home location used only for metadata."""
+    return prompt_for_text("Home location (optional)", existing)
+
+
+def resolve_runtime_config(
+    config: Config, config_path: Path, *, force_prompt: bool = False
+) -> Config:
+    """Fill in interactive config fields when required or explicitly requested."""
     account = config.account.strip()
-    if account:
+    home_location = config.home_location.strip()
+
+    if force_prompt and not sys.stdin.isatty():
+        raise RuntimeError("--setup requires an interactive terminal.")
+
+    if account and not force_prompt:
         config.account = account
+        config.home_location = home_location
         return config
 
     if not sys.stdin.isatty():
@@ -332,12 +351,14 @@ def resolve_account(config: Config, config_path: Path) -> Config:
             "Add an 'account' value to the config file or run the script interactively once."
         )
 
-    account = prompt_for_account()
+    account = prompt_for_account(account)
     if not account:
         raise RuntimeError("A Gmail address is required to continue.")
+    home_location = prompt_for_home_location(home_location)
     config.account = account
+    config.home_location = home_location
     save_config(config_path, config)
-    print(f"Saved Gmail account to {config_path}.")
+    print(f"Saved tracker config to {config_path}.")
     return config
 
 
@@ -869,7 +890,7 @@ LEAD_TO_APPLICATION = {
     "source": "lead_source",
     "company_careers_url": "company_careers_url",
     "remote_status": "remote_status",
-    "commute_minutes_from_fontana": "commute_minutes_from_fontana",
+    "commute_minutes_from_home": "commute_minutes_from_home",
     "pay_rate": "pay_rate",
     "employment_type": "employment_type",
     "schedule": "schedule",
@@ -1405,7 +1426,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--setup",
         action="store_true",
-        help="Interactively collect and save the Gmail account without running a sync.",
+        help="Interactively collect and save the Gmail account and optional home location without running a sync.",
     )
     parser.add_argument(
         "--diagnose",
@@ -1421,7 +1442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         config = load_config(args.config)
-        config = resolve_account(config, args.config)
+        config = resolve_runtime_config(config, args.config, force_prompt=args.setup)
         if args.setup:
             return 0
         if args.diagnose:
