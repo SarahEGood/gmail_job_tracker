@@ -139,7 +139,52 @@ class ParserTests(unittest.TestCase):
         updated, matches = update_application_rows([row], [event])
         self.assertEqual(updated[0]["date_applied"], "2026-06-28")
         self.assertEqual(updated[0]["status"], "Under review")
+        self.assertEqual(updated[0]["response_signal"], "Under review")
+        self.assertEqual(updated[0]["status_updated_at"], "2026-07-02T12:00:00+00:00")
+        self.assertEqual(
+            updated[0]["next_action"],
+            "Monitor for interview or assessment instructions.",
+        )
         self.assertEqual(matches["m1"], "company+title")
+
+    def test_rejection_updates_response_signal_and_follow_up_fields(self):
+        row = {column: "Unknown" for column in APPLIED_COLUMNS}
+        row.update(
+            {
+                "date_applied": "2026-06-28",
+                "title": "Office Assistant",
+                "company": "Example Co",
+                "status": "Applied",
+                "response_signal": "Unknown",
+                "next_action": "Unknown",
+            }
+        )
+        event = ParsedMessage(
+            message_id="m2",
+            thread_id="t2",
+            email_date="2026-07-03T12:00:00+00:00",
+            sender="Example Co <jobs@example.com>",
+            sender_domain="example.com",
+            subject="Update on your application for Office Assistant at Example Co",
+            status="rejected",
+            title="Office Assistant",
+            company="Example Co",
+            confidence=0.94,
+            needs_review=False,
+            gmail_url="https://mail.google.com/mail/u/0/#all/m2",
+            labels="CATEGORY_UPDATES",
+            evidence="decided not to proceed",
+        )
+        updated, matches = update_application_rows([row], [event])
+        self.assertEqual(updated[0]["status"], "Rejected")
+        self.assertEqual(updated[0]["response_signal"], "Rejected")
+        self.assertEqual(updated[0]["status_updated_at"], "2026-07-03T12:00:00+00:00")
+        self.assertEqual(
+            updated[0]["next_action"],
+            "Close the application and retain the employer/role history.",
+        )
+        self.assertEqual(updated[0]["gmail_message_id"], "m2")
+        self.assertEqual(matches["m2"], "company+title")
 
     def test_self_reported_application_links_to_job_lead(self):
         application = {column: "Unknown" for column in APPLIED_COLUMNS}
