@@ -1141,6 +1141,7 @@ def update_application_rows(
         row.update(
             {
                 "status": STATUS_LABELS[event.status],
+                "response_signal": STATUS_LABELS[event.status],
                 "status_updated_at": event.email_date,
                 "latest_email_date": event.email_date,
                 "latest_email_subject": event.subject,
