@@ -296,5 +296,42 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(resolved.home_location, "")
 
 
+class DocumentationEncodingTests(unittest.TestCase):
+    def test_readme_and_samples_remain_clean_utf8(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        replacement = chr(0xFFFD)
+        mojibake_a = chr(0x00E2)
+        mojibake_c = chr(0x00C3)
+        em_dash = chr(0x2014)
+        arrow = chr(0x2192)
+        files = [
+            repo_root / "README.md",
+            repo_root / "sample_data" / "README.md",
+            repo_root / "sample_data" / "application_events.sample.csv",
+            repo_root / "sample_data" / "applied_jobs.after.sample.csv",
+            repo_root / "sample_data" / "applied_jobs.before.sample.csv",
+            repo_root / "sample_data" / "job_leads.sample.csv",
+        ]
+
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(replacement, text, path.name)
+            self.assertNotIn(mojibake_a, text, path.name)
+            self.assertNotIn(mojibake_c, text, path.name)
+
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        files_section = readme.split("## Files", 1)[1].split("## One-time Gmail setup", 1)[0]
+        setup_section = readme.split("## One-time Gmail setup", 1)[1].split("## Install on Windows", 1)[0]
+        first_run_section = readme.split("## First run", 1)[1].split("## Normal updates", 1)[0]
+
+        self.assertIn(f"`gmail_job_tracker.py` {em_dash} tracker and parser.", files_section)
+        self.assertIn(
+            f"`run_gmail_tracker.ps1` {em_dash} Windows wrapper suitable for Task Scheduler.",
+            files_section,
+        )
+        self.assertIn(f"Open **Google Auth Platform {arrow} Audience**.", setup_section)
+        self.assertIn("If Google shows `Error 403: access_denied`", first_run_section)
+
+
 if __name__ == "__main__":
     unittest.main()
