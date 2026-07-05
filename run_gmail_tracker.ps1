@@ -11,6 +11,7 @@ if (-not (Test-Path -LiteralPath $python)) {
 if (-not (Test-Path -LiteralPath $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null
 }
+New-Item -ItemType File -Path $logFile -Force | Out-Null
 
 Push-Location $project
 try {

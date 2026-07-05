@@ -1,6 +1,8 @@
 import base64
+import io
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,7 @@ from gmail_job_tracker import (
     query_for_initial,
     resolve_runtime_config,
     save_config,
+    warn_if_stale_sync,
     update_application_rows,
 )
 
@@ -331,6 +334,28 @@ class DocumentationEncodingTests(unittest.TestCase):
         )
         self.assertIn(f"Open **Google Auth Platform {arrow} Audience**.", setup_section)
         self.assertIn("If Google shows `Error 403: access_denied`", first_run_section)
+
+
+class ScheduledRunGuardTests(unittest.TestCase):
+    def test_wrapper_creates_log_file_before_launching_python(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        script = (repo_root / "run_gmail_tracker.ps1").read_text(encoding="utf-8")
+        touch_line = 'New-Item -ItemType File -Path $logFile -Force | Out-Null'
+        launch_line = '& $python ".\\gmail_job_tracker.py" *>&1 |'
+        self.assertIn(touch_line, script)
+        self.assertIn(launch_line, script)
+        self.assertLess(script.index(touch_line), script.index(launch_line))
+
+    def test_warns_when_last_successful_sync_is_stale(self):
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            warn_if_stale_sync(
+                {"last_successful_sync": "2026-06-29T12:00:00+00:00"},
+                stale_after_days=3,
+            )
+        warning = stderr.getvalue()
+        self.assertIn("Warning: last successful sync was", warning)
+        self.assertIn("2026-06-29", warning)
 
 
 if __name__ == "__main__":

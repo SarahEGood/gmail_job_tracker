@@ -1262,6 +1262,21 @@ def parse_iso_datetime(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def warn_if_stale_sync(state: dict[str, Any], stale_after_days: int) -> None:
+    """Emit a clear warning when the previous successful sync is getting stale."""
+    last_successful_sync = state.get("last_successful_sync")
+    if not last_successful_sync:
+        return
+    last_sync = parse_iso_datetime(str(last_successful_sync))
+    age = datetime.now(timezone.utc) - last_sync
+    if age >= timedelta(days=stale_after_days):
+        print(
+            "Warning: last successful sync was "
+            f"{age.days} days ago on {last_sync.date()}; the tracker may be stale.",
+            file=sys.stderr,
+        )
+
+
 def run_sync(config: Config, *, dry_run: bool, relearn: bool) -> int:
     """Run the full Gmail sync pipeline, optionally without writing local files."""
     state_path = Path(config.state_file)
@@ -1270,6 +1285,7 @@ def run_sync(config: Config, *, dry_run: bool, relearn: bool) -> int:
     applied_path = Path(config.applied_jobs_file)
     leads_path = Path(config.job_leads_file)
     state = load_state(state_path)
+    warn_if_stale_sync(state, config.sync_overlap_days)
     service = build_service(config)
 
     if relearn or not learned_path.exists():
